@@ -39,7 +39,9 @@ transformed_dataset_val = AfewDataset(train=False)
 dataloader_val = DataLoader(transformed_dataset_val, batch_size=30,
                     shuffle=False, num_workers=4)
 
-use_cuda = True
+print(transformed_dataset.n)
+
+use_cuda = False
 model = Net()
 if use_cuda:
     model = model.cuda()
