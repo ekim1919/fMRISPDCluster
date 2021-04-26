@@ -1,0 +1,1 @@
+Namespace(bs=60, epochs=50, hs=2, lr=0.1, model='spd', use_cuda=True, ws=30)
