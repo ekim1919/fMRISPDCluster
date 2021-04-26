@@ -11,6 +11,7 @@ from spdnet.optimizer import StiefelMetaOptimizer
 
 use_cuda = True
 BATCH_SIZE = 7
+WS = 30 #window_size
 
 class recurrent_layer(nn.Module):
     def __init__(self):
@@ -119,10 +120,10 @@ class SPDRNNDataset(Dataset):
         return {'data': torch.from_numpy(self.data[idx].astype(np.float32)), 
                 'label': torch.from_numpy(self.labels[idx].astype(np.compat.long))}
 
-transformed_dataset = SPDRNNDataset(scan_id=1, ws=30)
+transformed_dataset = SPDRNNDataset(scan_id=1, ws=WS)
 dataloader = DataLoader(transformed_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
 
-transformed_dataset_val = SPDRNNDataset(scan_id=2, ws=30)
+transformed_dataset_val = SPDRNNDataset(scan_id=2, ws=WS)
 dataloader_val = DataLoader(transformed_dataset_val, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
 
 use_cuda = False
@@ -164,7 +165,9 @@ def train(epoch):
         bar.set_description('Loss: %.3f | Acc: %.3f%% (%d/%d)'
             % (train_loss/(batch_idx+1.0), 100.*correct/total, correct, total))
 
-    return (train_loss/(batch_idx+1), 100.*correct/total)best_acc = 0
+    return (train_loss/(batch_idx+1), 100.*correct/total)
+
+best_acc = 0
 def test(epoch):
     global best_acc
     model.eval()
@@ -204,7 +207,7 @@ def test(epoch):
         }
         if not os.path.isdir('checkpoint'):
             os.mkdir('checkpoint')
-        torch.save(state, './checkpoint/ckpt.t7')
+        torch.save(state, './checkpoint/rspd_ckpt.t7')
         best_acc = acc
 
     return (test_loss/(batch_idx+1), 100.*correct/total)

@@ -11,6 +11,7 @@ from spdnet.optimizer import StiefelMetaOptimizer
 
 use_cuda = True
 BATCH_SIZE = 7
+WS = 30 # window size
 
 class Net(nn.Module):
     def __init__(self):
@@ -76,10 +77,10 @@ class SPDataset(Dataset):
         return {'data': torch.from_numpy(self.data[idx].astype(np.float32)), 
                 'label': torch.from_numpy(self.labels[idx].astype(np.compat.long))}
 
-transformed_dataset = SPDataset(scan_id=1)
+transformed_dataset = SPDataset(scan_id=1, ws=WS)
 dataloader = DataLoader(transformed_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
 
-transformed_dataset_val = SPDataset(scan_id=2)
+transformed_dataset_val = SPDataset(scan_id=2, ws=WS)
 dataloader_val = DataLoader(transformed_dataset_val, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
 
 model = Net()
@@ -158,8 +159,9 @@ def test(epoch):
         }
         if not os.path.isdir('checkpoint'):
             os.mkdir('checkpoint')
-        torch.save(state, './checkpoint/ckpt.t7')
+        torch.save(state, './checkpoint/spd_ckpt.t7')
         best_acc = acc
+    return (test_loss/(batch_idx+1), 100.*correct/total)
 
 log_file = open('log_spd.txt', 'a')
 
@@ -172,6 +174,5 @@ for epoch in range(start_epoch, start_epoch+100):
     log_file.flush()
 
 log_file.close()
-    return (test_loss/(batch_idx+1), 100.*correct/total)
 
 
