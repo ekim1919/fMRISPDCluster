@@ -1,178 +1,78 @@
+import argparse
 import torch
 import numpy as np
 import pandas as pd
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
-
+import time
 from dataset import *
+from utils import *
 from spdnet.spd import SPDTransform, SPDTangentSpace, SPDRectified
 from spdnet.optimizer import StiefelMetaOptimizer
 
-use_cuda = True
-BATCH_SIZE = 7
-WS = 30 # window size
+def main(args):
+    exp_id = int(time.time())
+    
+    if args.model == 'spd':
+        model = SPDNet(args.hs)
+        train_data = SPDataset(scan_id=1, ws=args.ws)
+        test_data = SPDataset(scan_id=2, ws=args.ws)
+    elif args.model == 'rspd':
+        model = RSPDNet(args.hs, args.use_cuda)
+        train_data = SPDRNNDataset(scan_id=1, ws=args.ws)
+        test_data = SPDRNNDataset(scan_id=2, ws=args.ws)
+    if args.use_cuda:
+        model = model.cuda()
 
-class Net(nn.Module):
-    def __init__(self):
-        super(Net, self).__init__()
-        self.trans1 = SPDTransform(57, 20)
-        self.trans2 = SPDTransform(20, 10)
-        self.trans3 = SPDTransform(10, 2)
-        self.rect1  = SPDRectified()
-        self.rect2  = SPDRectified()
-        self.rect3  = SPDRectified()
-        self.tangent = SPDTangentSpace(2)
-        self.linear = nn.Linear(3, 17, bias=True)
-        # self.dropout = nn.Dropout(p=0.5)
+    train_data_loader = DataLoader(train_data, batch_size=args.bs, 
+            shuffle=False, num_workers=4)
+    test_data_loader = DataLoader(test_data, batch_size=args.bs, 
+            shuffle=False, num_workers=4)
 
-    def forward(self, x):
-        x = self.trans1(x)
-        x = self.rect1(x)
-        x = self.trans2(x)
-        x = self.rect2(x)
-        x = self.trans3(x)
-        x = self.rect3(x)
-        x = self.tangent(x)
-        # x = self.dropout(x)
-        x = self.linear(x)
-        return x
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
+    optimizer = StiefelMetaOptimizer(optimizer)
 
-def sliding_window(x, ws=30):
-    d, n = x.shape
-    return np.stack([(1/n)*np.matmul(x[:, i:ws+i], x[:, i:ws+i].T) for i in range(n-ws)])
+    best_acc = 0
 
-def get_sliding_labels(x, ws=30):
-    n = x.shape[0]
-    return np.stack([x[int(ws/2)+i] for i in range(n-ws)])
+    log_file = open('./log.txt', 'a')
 
-class SPDataset(Dataset):
-    def __init__(self, shuffle=False, scan_id=1, ws=30):
-        super(SPDataset, self).__init__()
-        self.scan_id = scan_id
-        self.ws = ws
-        lbls = np.loadtxt('./fMRIdata/timingLabels_WM_scan1.csv', dtype=np.int32)
-        data = []
-        labels = []
-        for i in range(1,31):
-            tmp_data = pd.read_csv(f'./fMRIdata/subject_1{i:02d}_scan{scan_id}.csv')
-            tmp_data = sliding_window(tmp_data.values, ws)
-            tmp_lbls = get_sliding_labels(lbls, ws)
-            data.append(tmp_data)
-            labels.append(tmp_lbls)
-        self.data = np.concatenate(data, axis=0)
-        self.labels = np.concatenate(labels, axis=0)[..., None] - 1.
+    for epoch in range(args.epochs):
+        train_loss, train_acc = iterate(args, epoch, model, train_data_loader, 
+                                        optimizer, criterion, best_acc, True, exp_id)
+        test_loss, test_acc = iterate(args, epoch, model, test_data_loader, 
+                                        optimizer, criterion, best_acc, False, exp_id)
 
-        if shuffle:
-            random.shuffle(self.data)
+        log_file.write('%s,%d,%d,%f,%f,%f,%f\n' % (args.model, exp_id, epoch, train_loss, 
+            train_acc, test_loss, test_acc))
+        log_file.flush()
 
-        self.nSamples = len(self.data) 
-        print(self.nSamples)
-        self.nClasses = 17
-        
-    def __len__(self):
-        return self.nSamples
+    log_file.close()
 
-    def __getitem__(self, idx):
-        return {'data': torch.from_numpy(self.data[idx].astype(np.float32)), 
-                'label': torch.from_numpy(self.labels[idx].astype(np.compat.long))}
+    arg_file = os.path.join(f'./checkpoint/{args.model}/{exp_id}', 'args.txt')
+    with open(arg_file, "w+") as f:
+        f.write(str(args))
+    
+    print(f'logpath: ./checkpoint/{args.model}/{exp_id}')
 
-transformed_dataset = SPDataset(scan_id=1, ws=WS)
-dataloader = DataLoader(transformed_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='CLI Options',
+                formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument("-model", default="spd",
+                help="Type of model: spd, rspd.")
+    parser.add_argument("-epochs", default=7, type=int,
+                help="Number of epochs to train for.")
+    parser.add_argument("-bs", default=7, type=int,
+                help="Batch size.")
+    parser.add_argument("-ws", default=30, type=int,
+                help="Window size.")
+    parser.add_argument("-hs", default=2, type=int,
+                help="Smallest reduction in the SPD manifold.")
+    parser.add_argument("-lr", default=.01, type=float,
+                help="Learning rate.")
+    parser.add_argument("-use_cuda", action='store_true',
+                help="Flag to use cuda.")
+    args = parser.parse_args()
 
-transformed_dataset_val = SPDataset(scan_id=2, ws=WS)
-dataloader_val = DataLoader(transformed_dataset_val, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
-
-model = Net()
-if use_cuda:
-    model = model.cuda()
-criterion = nn.CrossEntropyLoss()
-optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
-optimizer = StiefelMetaOptimizer(optimizer)
-
-def train(epoch):
-    print('\nEpoch: %d' % epoch)
-    model.train()
-    train_loss = 0
-    correct = 0.0
-    total = 0.0
-    bar = tqdm(enumerate(dataloader))
-    for batch_idx, sample_batched in bar:
-        inputs = sample_batched['data']
-        targets = sample_batched['label'].squeeze()
-
-        if use_cuda:
-            inputs = inputs.cuda()
-            targets = targets.cuda()
-
-        optimizer.zero_grad()
-        outputs = model(inputs)
-        loss = criterion(outputs, targets)
-        loss.backward()
-        optimizer.step()
-
-        train_loss += loss.data.item()
-        _, predicted = torch.max(outputs.data, 1)
-        total += targets.size(0)
-        correct += predicted.eq(targets.data).cpu().sum().data.item()
-
-        bar.set_description('Loss: %.3f | Acc: %.3f%% (%d/%d)'
-            % (train_loss/(batch_idx+1.0), 100.*correct/total, correct, total))
-
-    return (train_loss/(batch_idx+1), 100.*correct/total)
-
-best_acc = 0
-def test(epoch):
-    global best_acc
-    model.eval()
-    test_loss = 0
-    correct = 0.0
-    total = 0.0
-    bar = tqdm(enumerate(dataloader_val))
-    for batch_idx, sample_batched in bar:
-        inputs = sample_batched['data']
-        targets = sample_batched['label'].squeeze()
-
-        if use_cuda:
-            inputs = inputs.cuda()
-            targets = targets.cuda()
-
-        outputs = model(inputs)
-        loss = criterion(outputs, targets)
-
-        test_loss += loss.data.item()
-        _, predicted = torch.max(outputs.data, 1)
-        total += targets.size(0)
-        correct += predicted.eq(targets.data).cpu().sum().data.item()
-
-        bar.set_description('Loss: %.3f | Acc: %.3f%% (%d/%d)'
-            % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
-
-    # Save checkpoint.
-    acc = 100.*correct/total
-    if acc > best_acc:
-        print('Saving..')
-        state = {
-            'net': model,
-            'acc': acc,
-            'epoch': epoch,
-        }
-        if not os.path.isdir('checkpoint'):
-            os.mkdir('checkpoint')
-        torch.save(state, './checkpoint/spd_ckpt.t7')
-        best_acc = acc
-    return (test_loss/(batch_idx+1), 100.*correct/total)
-
-log_file = open('log_spd.txt', 'a')
-
-start_epoch = 1
-for epoch in range(start_epoch, start_epoch+100):
-    train_loss, train_acc = train(epoch)
-    test_loss, test_acc = test(epoch)
-
-    log_file.write('%d,%f,%f,%f,%f\n' % (epoch, train_loss, train_acc, test_loss, test_acc))
-    log_file.flush()
-
-log_file.close()
-
-
+    main(args)
